@@ -1,7 +1,6 @@
 from typing import (
     Any,
     AsyncIterable,
-    Callable,
     Dict,
     Optional,
     List,
@@ -33,6 +32,7 @@ from graphql.execution.execute import get_field_def
 from graphql.execution.values import get_argument_values
 
 from .sync_future import SyncFuture
+from .sync_dataloader import dataloader_batch_callbacks
 
 
 PENDING_FUTURE = object()
@@ -46,16 +46,12 @@ class DeferredExecutionContext(ExecutionContext):
     is executed and before the result is returned.
     """
 
-    _deferred_callbacks: List[Callable]
-
     def execute_operation(
         self, operation: OperationDefinitionNode, root_value: Any
     ) -> Optional[AwaitableOrValue[Any]]:
-        self._deferred_callbacks = []
         result = super().execute_operation(operation, root_value)
-        callbacks = self._deferred_callbacks
-        while callbacks:
-            callbacks.pop(0)()
+
+        dataloader_batch_callbacks.run_all_callbacks()
 
         if isinstance(result, SyncFuture):
             if not result.done():
@@ -90,7 +86,9 @@ class DeferredExecutionContext(ExecutionContext):
                     results[response_name] = PENDING_FUTURE
 
                     # noinspection PyShadowingNames, PyBroadException
-                    def process_result(response_name: str, result: SyncFuture) -> None:
+                    def process_result(
+                        response_name: str, result: SyncFuture, _: None
+                    ) -> None:
                         nonlocal unresolved
                         awaited_result = result.result()
                         if awaited_result is not Undefined:
@@ -147,12 +145,8 @@ class DeferredExecutionContext(ExecutionContext):
 
                 else:
 
-                    callback = result.deferred_callback
-                    if callback:
-                        self._deferred_callbacks.append(callback)
-
                     # noinspection PyShadowingNames
-                    def process_result():
+                    def process_result(_: Any):
                         try:
                             completed = self.complete_value(
                                 return_type, field_nodes, info, path, result.result()
@@ -160,7 +154,7 @@ class DeferredExecutionContext(ExecutionContext):
                             if isinstance(completed, SyncFuture):
 
                                 # noinspection PyShadowingNames
-                                def process_completed():
+                                def process_completed(_: Any):
                                     try:
                                         future.set_result(completed.result())
                                     except Exception as raw_error:
@@ -171,8 +165,9 @@ class DeferredExecutionContext(ExecutionContext):
                                         future.set_result(None)
 
                                 if completed.done():
-                                    process_completed()
+                                    process_completed(completed.result())
                                 else:
+
                                     completed.add_done_callback(process_completed)
                             else:
                                 future.set_result(completed)
@@ -195,7 +190,7 @@ class DeferredExecutionContext(ExecutionContext):
             if isinstance(completed, SyncFuture):
 
                 # noinspection PyShadowingNames
-                def process_completed():
+                def process_completed(_: Any):
                     try:
                         future.set_result(completed.result())
                     except Exception as raw_error:
@@ -204,7 +199,7 @@ class DeferredExecutionContext(ExecutionContext):
                         future.set_result(None)
 
                 if completed.done():
-                    return process_completed()
+                    return process_completed(completed.result())
 
                 future = SyncFuture()
                 completed.add_done_callback(process_completed)
@@ -230,13 +225,13 @@ class DeferredExecutionContext(ExecutionContext):
         if not is_iterable(result):
             if isinstance(result, SyncFuture):
 
-                def process_result():
+                def process_result(_: Any):
                     return self.complete_list_value(
                         return_type, field_nodes, info, path, result.result()
                     )
 
                 if result.done():
-                    return process_result()
+                    return process_result(result.result())
                 future = SyncFuture()
                 result.add_done_callback(process_result)
                 return future
@@ -263,13 +258,12 @@ class DeferredExecutionContext(ExecutionContext):
                             item_type, field_nodes, info, item_path, item.result()
                         )
                     else:
-                        callback = item.deferred_callback
-                        if callback:
-                            self._deferred_callbacks.append(callback)
-
                         # noinspection PyShadowingNames
                         def process_item(
-                            index: int, item: SyncFuture, item_path: Path
+                            index: int,
+                            item: SyncFuture,
+                            item_path: Path,
+                            _: Any,
                         ) -> None:
                             nonlocal unresolved
                             try:
@@ -290,6 +284,7 @@ class DeferredExecutionContext(ExecutionContext):
                                             index: int,
                                             completed: SyncFuture,
                                             item_path: Path,
+                                            _: Any,
                                         ) -> None:
                                             try:
                                                 results[index] = completed.result()
@@ -337,13 +332,12 @@ class DeferredExecutionContext(ExecutionContext):
                     if completed.done():
                         results[index] = completed.result()
                     else:
-                        callback = completed.deferred_callback
-                        if callback:
-                            self._deferred_callbacks.append(callback)
-
                         # noinspection PyShadowingNames
                         def process_completed(
-                            index: int, completed: SyncFuture, item_path: Path
+                            index: int,
+                            completed: SyncFuture,
+                            item_path: Path,
+                            _: Any,
                         ) -> None:
                             nonlocal unresolved
                             try:
