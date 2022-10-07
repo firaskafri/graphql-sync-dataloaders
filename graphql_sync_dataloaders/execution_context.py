@@ -9,7 +9,7 @@ from typing import (
     cast,
 )
 from functools import partial
-
+from promise.promise import Promise
 from graphql import (
     ExecutionContext,
     FieldNode,
@@ -133,6 +133,9 @@ class DeferredExecutionContext(ExecutionContext):
             args = get_argument_values(field_def, field_nodes[0], self.variable_values)
             result = resolve_fn(source, info, **args)
 
+            if isinstance(result, Promise) and isinstance(result.value, Exception):
+                raise result.value
+
             if isinstance(result, SyncFuture):
 
                 if result.done():
@@ -216,6 +219,9 @@ class DeferredExecutionContext(ExecutionContext):
         path: Path,
         result: Union[AsyncIterable[Any], Iterable[Any]],
     ) -> Union[AwaitableOrValue[List[Any]], SyncFuture]:
+        if isinstance(result, Promise) and isinstance(result.value, Exception):
+            raise result.value
+
         if not is_iterable(result):
             if isinstance(result, SyncFuture):
 
